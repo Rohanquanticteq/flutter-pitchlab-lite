@@ -22,7 +22,7 @@ android {
     defaultConfig {
         applicationId = "com.example.pitchlab_lite"
         // record 6.x requires Android API 23 or newer.
-        minSdk = 23
+        minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
