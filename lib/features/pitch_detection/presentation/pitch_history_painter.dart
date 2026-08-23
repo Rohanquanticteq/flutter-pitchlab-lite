@@ -58,14 +58,13 @@ class PitchHistoryPainter extends CustomPainter {
     final bottom = size.height - _verticalPadding;
     final rowSpacing = (bottom - top) / (_notes.length - 1);
 
-    _paintGrid(canvas, size, top, bottom, rowSpacing);
+    _paintGrid(canvas, size, bottom, rowSpacing);
     _paintHistory(canvas, size, top, bottom, rowSpacing);
   }
 
   void _paintGrid(
     Canvas canvas,
     Size size,
-    double top,
     double bottom,
     double rowSpacing,
   ) {
@@ -133,7 +132,7 @@ class PitchHistoryPainter extends CustomPainter {
 
       final x = graphRight - (ageMicros / historyMicros) * graphWidth;
       final y = bottom - position * rowSpacing;
-      final currentOffset = Offset(x, y.clamp(top, bottom));
+      final currentOffset = Offset(x, y.clamp(top, bottom).toDouble());
 
       final previousPoint = previous;
       final previousPointOffset = previousOffset;
@@ -144,8 +143,9 @@ class PitchHistoryPainter extends CustomPainter {
         final averagePitch =
             ((previousPoint.pitchClassPosition! + position) / 2).round() % 12;
         final color = _noteColors[averagePitch];
-        final confidence =
-            ((previousPoint.confidence + point.confidence) / 2).clamp(0.0, 1.0);
+        final confidence = ((previousPoint.confidence + point.confidence) / 2)
+            .clamp(0.0, 1.0)
+            .toDouble();
         _drawGlowingSegment(
           canvas,
           previousPointOffset,
@@ -167,7 +167,7 @@ class PitchHistoryPainter extends CustomPainter {
     Color color,
     double confidence,
   ) {
-    final opacity = (0.28 + confidence * 0.72).clamp(0.0, 1.0);
+    final opacity = (0.28 + confidence * 0.72).clamp(0.0, 1.0).toDouble();
 
     canvas.drawLine(
       from,
