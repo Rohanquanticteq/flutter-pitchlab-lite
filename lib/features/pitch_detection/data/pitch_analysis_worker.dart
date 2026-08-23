@@ -26,6 +26,10 @@ class PitchAnalysisWorker {
   SendPort? _workerPort;
   Completer<void>? _readyCompleter;
 
+  bool _busy = false;
+  Uint8List? _pendingFrame;
+  int? _pendingSampleRate;
+
   Stream<PitchAnalysisResult> get results => _resultController.stream;
 
   Future<void> start() async {
@@ -42,18 +46,25 @@ class PitchAnalysisWorker {
   }
 
   void analyze(Uint8List pcm16Bytes, int sampleRate) {
-    final workerPort = _workerPort;
-    if (workerPort == null) {
+    if (_workerPort == null) {
       return;
     }
 
-    workerPort.send(<Object>[
-      TransferableTypedData.fromList(<Uint8List>[pcm16Bytes]),
-      sampleRate,
-    ]);
+    if (_busy) {
+      // Keep only the newest unprocessed frame. This bounds memory and prevents
+      // old audio from accumulating latency on slower devices.
+      _pendingFrame = pcm16Bytes;
+      _pendingSampleRate = sampleRate;
+      return;
+    }
+
+    _sendFrame(pcm16Bytes, sampleRate);
   }
 
   Future<void> dispose() async {
+    _pendingFrame = null;
+    _pendingSampleRate = null;
+    _busy = false;
     _workerPort?.send('stop');
     _workerPort = null;
     _isolate?.kill(priority: Isolate.immediate);
@@ -76,6 +87,7 @@ class PitchAnalysisWorker {
     }
 
     if (message is Map<Object?, Object?>) {
+      _busy = false;
       _resultController.add(
         PitchAnalysisResult(
           frequency: message['frequency'] as double?,
@@ -83,7 +95,28 @@ class PitchAnalysisWorker {
           rms: (message['rms'] as num).toDouble(),
         ),
       );
+
+      final pendingFrame = _pendingFrame;
+      final pendingSampleRate = _pendingSampleRate;
+      _pendingFrame = null;
+      _pendingSampleRate = null;
+      if (pendingFrame != null && pendingSampleRate != null) {
+        _sendFrame(pendingFrame, pendingSampleRate);
+      }
     }
+  }
+
+  void _sendFrame(Uint8List pcm16Bytes, int sampleRate) {
+    final workerPort = _workerPort;
+    if (workerPort == null) {
+      return;
+    }
+
+    _busy = true;
+    workerPort.send(<Object>[
+      TransferableTypedData.fromList(<Uint8List>[pcm16Bytes]),
+      sampleRate,
+    ]);
   }
 
   static void _workerEntryPoint(SendPort mainPort) {
