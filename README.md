@@ -11,7 +11,9 @@ The app can now:
 - stream actual PCM16 microphone samples (no mock/random pitch values);
 - analyze audio continuously on a background isolate;
 - estimate fundamental frequency with a YIN-style detector;
-- convert frequency into note name, octave, and cents deviation;
+- convert frequency into chromatic pitch class, octave, and cents deviation;
+- expose the primary PitchLab-style note as an octave-independent label such as `D#`, not `D#2` / `D#3`;
+- expose a continuous octave-independent pitch-class position for the future scrolling graph;
 - reject silence and low-confidence/noisy frames;
 - release microphone, stream subscriptions, worker isolate, and recorder resources on stop/dispose;
 - operate fully offline.
@@ -51,7 +53,7 @@ YIN pitch detector
 frequency + confidence + RMS
       ↓
 PitchReading
-(frequency → note → octave → cents)
+(frequency → pitch class + octave + cents)
       ↓
 PitchDetectorController
       ↓
@@ -111,17 +113,21 @@ nearestMidi    = round(fractionalMidi)
 cents          = (fractionalMidi - nearestMidi) × 100
 ```
 
-The nearest note is mapped to:
+The nearest pitch class is mapped to:
 
 `C C# D D# E F F# G G# A A# B`
 
-and the octave is derived from the MIDI-equivalent note number.
+The scientific-pitch octave is still calculated internally for diagnostics and future features, but it is deliberately not part of the primary PitchLab-style note label.
 
-Examples:
+For example:
 
-- 440.00 Hz → A4, ~0 cents
-- 261.63 Hz → C4, ~0 cents
-- slightly above 440 Hz → A4 with positive cents
+- ~77.78 Hz is scientifically `D#2`, but the primary app pitch is `D#`;
+- ~155.56 Hz is scientifically `D#3`, but the primary app pitch is also `D#`;
+- 440.00 Hz is scientifically `A4`, while the primary app pitch is `A`.
+
+This is intentional. The reference PitchLab visualization is chromatic and octave-independent: the user should see the pitch class (`D#`) rather than octave suffixes jumping between `D#2` and `D#3`.
+
+`PitchReading.pitchClassPosition` also normalizes the continuous detected pitch into one chromatic octave in the range `[0, 12)`, where C = 0, C# = 1, ... B = 11. The future scrolling visualization should use this value so an octave estimation change does not cause the trace to jump to another octave row.
 
 ## Silence and noise handling
 
@@ -137,6 +143,8 @@ The UI then shows **Listening — no clear pitch detected** instead of inventing
 ## Concurrency and latency
 
 PCM bytes are assembled into fixed 2,048-sample frames and transferred to a persistent background isolate with `TransferableTypedData`. The YIN loops therefore do not run on Flutter's UI isolate.
+
+The DSP worker uses bounded backpressure: it analyzes at most one frame at a time and retains only the newest pending frame. If a device cannot process frames as quickly as they arrive, old stale frames are discarded rather than accumulating latency or memory usage.
 
 A 2,048-sample frame at 44.1 kHz represents roughly 46 ms of audio, giving a practical starting point for responsive voice pitch tracking. Real-device profiling will determine whether overlap, adaptive frames, or native DSP are needed later.
 
@@ -163,8 +171,8 @@ Tap **Start listening**, grant microphone permission, and sing or play one clear
 
 The temporary diagnostic UI displays:
 
-- detected note and octave;
-- frequency in Hz;
+- detected chromatic pitch class without octave suffix (`A`, `D#`, etc.);
+- raw frequency in Hz;
 - cents deviation;
 - confidence;
 - listening/no-pitch/error state.
@@ -188,7 +196,7 @@ and an iOS simulator build on macOS:
 flutter build ios --simulator --no-codesign
 ```
 
-Unit tests cover note conversion, synthetic 440 Hz and 110 Hz tones, silence rejection, and the initial screen state.
+Unit tests cover note conversion, octave-independent pitch-class behavior, synthetic 440 Hz and 110 Hz tones, silence rejection, and the initial screen state.
 
 ## Scope of this milestone
 
@@ -203,4 +211,4 @@ Not included yet:
 - polyphonic/chord detection;
 - session recording or saved audio.
 
-The next milestone should build the scrolling pitch visualization on top of the `PitchReading` stream after real-device accuracy and latency testing.
+The next milestone should build the scrolling pitch visualization on top of `PitchReading.pitchClassPosition` after real-device accuracy and latency testing.
