@@ -1,24 +1,59 @@
 # PitchLab Lite
 
-A Flutter mobile application for real-time monophonic pitch detection. The current milestone focuses on the core microphone-to-pitch pipeline; the PitchLab-style scrolling visualization will be added later.
+A Flutter mobile tuner inspired by the PitchLab Lite scrolling pitch display.
 
-## Current feature: real-time microphone pitch detection
+The project now has two working layers:
 
-The app can now:
+1. real-time monophonic pitch detection from the device microphone;
+2. a PitchLab-style scrolling chromatic pitch-history visualization.
 
-- request microphone permission on Android and iOS;
-- start and stop microphone listening from the UI;
-- stream actual PCM16 microphone samples (no mock/random pitch values);
-- analyze audio continuously on a background isolate;
-- estimate fundamental frequency with a YIN-style detector;
-- convert frequency into chromatic pitch class, octave, and cents deviation;
-- expose the primary PitchLab-style note as an octave-independent label such as `D#`, not `D#2` / `D#3`;
-- expose a continuous octave-independent pitch-class position for the future scrolling graph;
-- reject silence and low-confidence/noisy frames;
-- release microphone, stream subscriptions, worker isolate, and recorder resources on stop/dispose;
-- operate fully offline.
+## Current functionality
+
+- requests microphone permission on Android and iOS;
+- starts/stops real microphone capture;
+- streams PCM16 mono audio at a requested 44.1 kHz;
+- analyzes frames on a persistent background isolate;
+- estimates the fundamental frequency with a project-owned YIN-style detector;
+- converts frequency into chromatic pitch class, cents, confidence, and scientific octave;
+- uses octave-independent primary pitch labels (`D#`, not `D#2` / `D#3`);
+- renders a full-screen 12-note chromatic history view;
+- scrolls recent pitch from right to left over an 8-second window;
+- shows continuous pitch movement between note centers for vibrato, bends, and slides;
+- creates gaps during silence/no-pitch states;
+- keeps history and DSP queues bounded to prevent memory/latency growth;
+- operates fully offline.
 
 ## Architecture
+
+```text
+Device microphone
+      ↓
+record package (PCM16 mono)
+      ↓
+2048-sample frame assembler
+      ↓
+PitchAnalysisWorker (background isolate)
+      ↓
+YIN pitch detector
+      ↓
+frequency + confidence + RMS
+      ↓
+PitchReading
+      ├─ noteName (C..B)
+      ├─ cents
+      ├─ octave (internal)
+      └─ pitchClassPosition [0, 12)
+      ↓
+PitchDetectorController
+      ↓
+PitchHistoryBuffer (bounded rolling history)
+      ↓
+PitchHistoryPainter (CustomPainter)
+      ↓
+PitchLab-style scrolling tuner screen
+```
+
+### Folder structure
 
 ```text
 lib/
@@ -35,153 +70,107 @@ lib/
         pitch_reading.dart
       presentation/
         pitch_detector_screen.dart
+        pitch_history_buffer.dart
+        pitch_history_painter.dart
 ```
 
-### Data flow
+## PitchLab-style display behavior
+
+The visualizer intentionally folds all octaves into one chromatic scale:
 
 ```text
-Device microphone
-      ↓
-record package (PCM16 mono, 44.1 kHz)
-      ↓
-Fixed 2048-sample frame assembler
-      ↓
-Background Dart isolate
-      ↓
-YIN pitch detector
-      ↓
-frequency + confidence + RMS
-      ↓
-PitchReading
-(frequency → pitch class + octave + cents)
-      ↓
-PitchDetectorController
-      ↓
-Simple Flutter diagnostic UI
+C  C#  D  D#  E  F  F#  G  G#  A  A#  B
 ```
 
-Raw microphone samples are analyzed in memory and are not persisted to disk.
+Examples:
 
-## Dependency choice
+- `D#2` → displayed on the `D#` row;
+- `D#3` → displayed on the same `D#` row;
+- `D#4` → displayed on the same `D#` row.
 
-The project uses:
+The raw frequency and octave are still kept internally. The graph uses `PitchReading.pitchClassPosition`, a continuous octave-independent coordinate where C = 0, C# = 1, ... B = 11. Fractional positions represent pitch between note centers, so vibrato and bends appear as continuous movement instead of discrete note jumps.
 
-```yaml
-record: ^6.2.1
-```
+## Scrolling visualization
 
-The project currently targets Dart `^3.11.1`. `record` 6.2.1 supports PCM16 microphone streaming on Android and iOS and remains compatible with that SDK range. The package is BSD-3-Clause licensed.
+The current screen uses Flutter `CustomPainter` rather than a chart package.
 
-The package is used only for microphone capture and platform permission handling. Pitch detection itself is implemented inside this project so the DSP can be tuned and extended later.
+- black full-screen background;
+- 12 horizontal note guide lines;
+- note labels on the left;
+- recent pitch history retained for about 8 seconds;
+- newest pitch appears at the right edge;
+- older pitch moves left as time advances;
+- trace color varies by pitch class;
+- confidence influences trace strength;
+- silence/no-pitch inserts a break rather than connecting unrelated notes;
+- history is capped at 512 points and old points are trimmed continuously.
 
-## Audio configuration
-
-Current capture settings:
-
-- PCM signed 16-bit;
-- mono;
-- requested sample rate: 44,100 Hz;
-- frame size: 2,048 samples (~46 ms at 44.1 kHz);
-- automatic gain control disabled;
-- echo cancellation disabled;
-- noise suppression disabled.
-
-Disabling voice-processing effects helps preserve the periodic waveform structure needed for pitch analysis.
+The renderer calculates horizontal position from sample age. It does not physically shift UI widgets or append an unlimited number of objects, keeping long-running rendering bounded.
 
 ## Pitch detection
 
-The detector uses a YIN-style periodicity analysis:
+The detector uses a YIN-style periodicity pipeline:
 
-1. remove DC offset by centering the frame around its mean;
+1. remove DC offset;
 2. calculate RMS and reject very quiet frames;
-3. calculate the YIN difference function over plausible periods;
-4. calculate cumulative mean normalized difference (CMND);
-5. locate a strong periodic minimum;
-6. refine the period using parabolic interpolation;
-7. convert period to frequency with `frequency = sampleRate / period`;
-8. reject low-confidence or out-of-range results.
+3. calculate the difference function over plausible periods;
+4. calculate cumulative mean normalized difference;
+5. select a reliable periodic minimum;
+6. refine the period with parabolic interpolation;
+7. calculate `frequency = sampleRate / period`;
+8. reject low-confidence/out-of-range results.
 
-The initial search range is approximately **65 Hz to 1200 Hz**, covering typical singing voice and many monophonic instruments.
+Current approximate detection range: **65 Hz–1200 Hz**.
 
-## Frequency to note conversion
+## Frequency to musical pitch
 
-The current reference is equal temperament with **A4 = 440 Hz**.
+Reference tuning is currently **A4 = 440 Hz**.
 
 ```text
 fractionalMidi = 69 + 12 × log2(frequency / 440)
 nearestMidi    = round(fractionalMidi)
 cents          = (fractionalMidi - nearestMidi) × 100
+pitchClass     = nearestMidi mod 12
 ```
 
-The nearest pitch class is mapped to:
+The primary displayed note omits octave by design, matching the chromatic PitchLab view.
 
-`C C# D D# E F F# G G# A A# B`
+## Dependency
 
-The scientific-pitch octave is still calculated internally for diagnostics and future features, but it is deliberately not part of the primary PitchLab-style note label.
+```yaml
+record: ^6.2.1
+```
 
-For example:
-
-- ~77.78 Hz is scientifically `D#2`, but the primary app pitch is `D#`;
-- ~155.56 Hz is scientifically `D#3`, but the primary app pitch is also `D#`;
-- 440.00 Hz is scientifically `A4`, while the primary app pitch is `A`.
-
-This is intentional. The reference PitchLab visualization is chromatic and octave-independent: the user should see the pitch class (`D#`) rather than octave suffixes jumping between `D#2` and `D#3`.
-
-`PitchReading.pitchClassPosition` also normalizes the continuous detected pitch into one chromatic octave in the range `[0, 12)`, where C = 0, C# = 1, ... B = 11. The future scrolling visualization should use this value so an octave estimation change does not cause the trace to jump to another octave row.
-
-## Silence and noise handling
-
-A frame produces no pitch when:
-
-- RMS is below the silence threshold;
-- periodicity is too weak;
-- confidence is below the configured threshold;
-- frequency is outside the supported range.
-
-The UI then shows **Listening — no clear pitch detected** instead of inventing a note.
-
-## Concurrency and latency
-
-PCM bytes are assembled into fixed 2,048-sample frames and transferred to a persistent background isolate with `TransferableTypedData`. The YIN loops therefore do not run on Flutter's UI isolate.
-
-The DSP worker uses bounded backpressure: it analyzes at most one frame at a time and retains only the newest pending frame. If a device cannot process frames as quickly as they arrive, old stale frames are discarded rather than accumulating latency or memory usage.
-
-A 2,048-sample frame at 44.1 kHz represents roughly 46 ms of audio, giving a practical starting point for responsive voice pitch tracking. Real-device profiling will determine whether overlap, adaptive frames, or native DSP are needed later.
+`record` is used for microphone streaming and platform permission handling. Pitch analysis and the visualization are implemented inside this project.
 
 ## Permissions
 
 ### Android
 
-`android/app/src/main/AndroidManifest.xml` declares `android.permission.RECORD_AUDIO`. The Android minimum SDK is set to API 23 to satisfy the microphone package requirements.
+`android/app/src/main/AndroidManifest.xml` declares:
+
+```text
+android.permission.RECORD_AUDIO
+```
 
 ### iOS
 
-`ios/Runner/Info.plist` contains `NSMicrophoneUsageDescription` explaining why microphone access is required.
+`ios/Runner/Info.plist` contains `NSMicrophoneUsageDescription`.
 
 ## Running
 
-Use a physical Android device or iPhone for meaningful microphone testing.
+Use a physical Android or iOS device for real microphone testing:
 
 ```bash
 flutter pub get
 flutter run
 ```
 
-Tap **Start listening**, grant microphone permission, and sing or play one clear sustained note.
-
-The temporary diagnostic UI displays:
-
-- detected chromatic pitch class without octave suffix (`A`, `D#`, etc.);
-- raw frequency in Hz;
-- cents deviation;
-- confidence;
-- listening/no-pitch/error state.
-
-Tap **Stop listening** to release the microphone.
+Tap the microphone icon to start listening. The graph will begin drawing when a reliable pitched sound is detected. Tap the stop icon to release the microphone.
 
 ## Validation
 
-The repository includes GitHub Actions validation. It runs:
+GitHub Actions runs:
 
 ```bash
 flutter pub get
@@ -190,25 +179,21 @@ flutter test
 flutter build apk --debug
 ```
 
-and an iOS simulator build on macOS:
+and on macOS:
 
 ```bash
 flutter build ios --simulator --no-codesign
 ```
 
-Unit tests cover note conversion, octave-independent pitch-class behavior, synthetic 440 Hz and 110 Hz tones, silence rejection, and the initial screen state.
+Tests cover pitch conversion, octave-independent note behavior, synthetic pitch detection, silence rejection, bounded history, gap handling, and the tuner screen start state.
 
-## Scope of this milestone
+## Next refinements
 
-This is intentionally not the final PitchLab visualization. The current screen is only a diagnostic interface for proving the pitch engine.
+The visualization is now functionally in place. Remaining refinement work should be driven by physical-device testing, especially:
 
-Not included yet:
-
-- scrolling pitch-history graph;
-- calibration UI;
-- graph smoothing/history;
-- instrument presets;
-- polyphonic/chord detection;
-- session recording or saved audio.
-
-The next milestone should build the scrolling pitch visualization on top of `PitchReading.pitchClassPosition` after real-device accuracy and latency testing.
+- exact scroll speed/history duration;
+- trace density/glow appearance;
+- real-device pitch stability and octave-error correction;
+- confidence-to-intensity mapping;
+- optional auto-start behavior;
+- calibration/reference pitch settings.
