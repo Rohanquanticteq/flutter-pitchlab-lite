@@ -14,6 +14,7 @@ The project now has two working layers:
 - streams PCM16 mono audio at a requested 44.1 kHz;
 - analyzes frames on a persistent background isolate;
 - estimates the fundamental frequency with a project-owned YIN-style detector;
+- applies a stable-tone gate so short/rapid speech pitch does not immediately drive the tuner;
 - converts frequency into chromatic pitch class, cents, confidence, and scientific octave;
 - uses octave-independent primary pitch labels (`D#`, not `D#2` / `D#3`);
 - renders a full-screen 12-note chromatic history view;
@@ -37,6 +38,9 @@ PitchAnalysisWorker (background isolate)
 YIN pitch detector
       ↓
 frequency + confidence + RMS
+      ↓
+StableToneGate
+(sustained/high-confidence pitch only)
       ↓
 PitchReading
       ├─ noteName (C..B)
@@ -122,6 +126,26 @@ The detector uses a YIN-style periodicity pipeline:
 
 Current approximate detection range: **65 Hz–1200 Hz**.
 
+## Stable musical-tone filtering
+
+Raw pitch detection also works on normal voiced speech, because speech has a fundamental frequency. That is correct DSP behavior but undesirable for a tuner: nearby conversation should not make the tuner jump rapidly between notes.
+
+The live stream therefore passes through `StableToneGate` after YIN detection and before the controller/visualization.
+
+A new tuner pitch is accepted only when:
+
+- confidence is at least 0.80;
+- the chromatic pitch stays within about 35 cents for 5 consecutive analysis frames;
+- after a tone is locked, normal vibrato/gradual movement up to about 90 cents between updates is allowed;
+- a sudden different note must become stable before it replaces the current lock;
+- silence or unreliable input still emits no pitch, so the graph contains a gap instead of a stale line.
+
+With the current 2,048-sample frames at 44.1 kHz, first acquisition is roughly a 200–250 ms stability check. This is intentional tuner behavior: it trades a small amount of acquisition delay for much lower distraction from normal conversation.
+
+Stability is measured **modulo one octave**. An octave-estimation change such as `D#2 -> D#3` still counts as the same chromatic `D#` tone and does not force re-acquisition.
+
+This is a musical stability filter, not a speech-recognition model. A person deliberately sustaining a steady vowel/note can still be detected, which is desirable for singing/voice tuning.
+
 ## Frequency to musical pitch
 
 Reference tuning is currently **A4 = 440 Hz**.
@@ -185,7 +209,7 @@ and on macOS:
 flutter build ios --simulator --no-codesign
 ```
 
-Tests cover pitch conversion, octave-independent note behavior, synthetic pitch detection, silence rejection, bounded history, gap handling, and the tuner screen start state.
+Tests cover pitch conversion, octave-independent note behavior, synthetic pitch detection, silence rejection, speech-like rapid pitch rejection, stable-tone acquisition, octave-stable locking, bounded history, gap handling, and the tuner screen start state.
 
 ## Next refinements
 
