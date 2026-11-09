@@ -13,9 +13,9 @@ import 'package:pitchlab_lite/features/pitch_detection/domain/pitch_reading.dart
 class StableToneGate {
   StableToneGate({
     this.acquireFrames = 5,
-    this.acquireToleranceCents = 35.0,
-    this.followToleranceCents = 90.0,
-    this.minimumConfidence = 0.80,
+    this.acquireToleranceCents = 55.0,
+    this.followToleranceCents = 100.0,
+    this.minimumConfidence = 0.70,
     this.releaseAfterMissingFrames = 6,
   }) : assert(acquireFrames > 0),
        assert(acquireToleranceCents > 0),
