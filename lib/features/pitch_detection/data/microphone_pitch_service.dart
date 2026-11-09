@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:pitchlab_lite/features/pitch_detection/data/pitch_analysis_worker.dart';
+import 'package:pitchlab_lite/features/pitch_detection/data/stable_tone_gate.dart';
 import 'package:pitchlab_lite/features/pitch_detection/domain/pitch_reading.dart';
 import 'package:record/record.dart';
 
@@ -14,6 +15,7 @@ class MicrophonePitchService {
 
   final AudioRecorder _recorder = AudioRecorder();
   final PitchAnalysisWorker _analysisWorker = PitchAnalysisWorker();
+  final StableToneGate _stableToneGate = StableToneGate();
   final StreamController<PitchReading?> _readingController =
       StreamController<PitchReading?>.broadcast();
 
@@ -42,7 +44,8 @@ class MicrophonePitchService {
     }
 
     await _analysisWorker.start();
-    _analysisSubscription ??= _analysisWorker.results.listen(_handleAnalysisResult);
+    _analysisSubscription ??=
+        _analysisWorker.results.listen(_handleAnalysisResult);
 
     final stream = await _recorder.startStream(
       const RecordConfig(
@@ -57,6 +60,7 @@ class MicrophonePitchService {
     );
 
     _frameOffset = 0;
+    _stableToneGate.reset();
     _isRunning = true;
     _audioSubscription = stream.listen(
       _handleAudioChunk,
@@ -73,6 +77,7 @@ class MicrophonePitchService {
 
     _isRunning = false;
     _frameOffset = 0;
+    _stableToneGate.reset();
     await _audioSubscription?.cancel();
     _audioSubscription = null;
     await _recorder.stop();
@@ -128,15 +133,15 @@ class MicrophonePitchService {
 
     final frequency = result.frequency;
     if (frequency == null) {
-      _readingController.add(null);
+      _readingController.add(_stableToneGate.process(null));
       return;
     }
 
-    _readingController.add(
-      PitchReading.fromFrequency(
-        frequency,
-        confidence: result.confidence,
-      ),
+    final rawReading = PitchReading.fromFrequency(
+      frequency,
+      confidence: result.confidence,
     );
+
+    _readingController.add(_stableToneGate.process(rawReading));
   }
 }
