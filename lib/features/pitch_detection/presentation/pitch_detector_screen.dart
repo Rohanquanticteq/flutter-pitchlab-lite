@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:pitchlab_lite/features/pitch_detection/application/pitch_detector_controller.dart';
+import 'package:pitchlab_lite/features/pitch_detection/domain/pitch_reading.dart';
 import 'package:pitchlab_lite/features/pitch_detection/presentation/pitch_history_buffer.dart';
 import 'package:pitchlab_lite/features/pitch_detection/presentation/pitch_history_painter.dart';
 
@@ -15,8 +16,11 @@ class _PitchDetectorScreenState extends State<PitchDetectorScreen>
   late final PitchDetectorController _controller;
   late final AnimationController _repaintTicker;
   final PitchHistoryBuffer _history = PitchHistoryBuffer();
+  final PitchHistoryBuffer _candidateHistory = PitchHistoryBuffer();
 
   PitchDetectorStatus? _lastStatus;
+  PitchReading? _lastRecordedReading;
+  PitchReading? _lastRecordedCandidate;
 
   @override
   void initState() {
@@ -43,15 +47,31 @@ class _PitchDetectorScreenState extends State<PitchDetectorScreen>
     }
 
     final reading = _controller.reading;
-    if (reading != null) {
+    if (reading != null && !identical(reading, _lastRecordedReading)) {
       _history.addReading(reading);
-    } else if (_controller.status == PitchDetectorStatus.noPitch &&
+      _lastRecordedReading = reading;
+    } else if (reading == null &&
+        _controller.status == PitchDetectorStatus.noPitch &&
         _lastStatus != PitchDetectorStatus.noPitch) {
       _history.addGap();
+      _lastRecordedReading = null;
+    }
+
+    final candidate = _controller.candidateReading;
+    if (candidate != null &&
+        !identical(candidate, _lastRecordedCandidate)) {
+      _candidateHistory.addReading(candidate);
+      _lastRecordedCandidate = candidate;
+    } else if (candidate == null && _lastRecordedCandidate != null) {
+      _candidateHistory.addGap();
+      _lastRecordedCandidate = null;
     }
 
     if (_controller.status == PitchDetectorStatus.idle) {
       _history.clear();
+      _candidateHistory.clear();
+      _lastRecordedReading = null;
+      _lastRecordedCandidate = null;
     }
 
     _lastStatus = _controller.status;
@@ -74,9 +94,11 @@ class _PitchDetectorScreenState extends State<PitchDetectorScreen>
               animation: _repaintTicker,
               builder: (BuildContext context, Widget? child) {
                 _history.trim();
+                _candidateHistory.trim();
                 return CustomPaint(
                   painter: PitchHistoryPainter(
                     points: _history.points,
+                    candidatePoints: _candidateHistory.points,
                     now: DateTime.now(),
                     historyDuration: _history.historyDuration,
                   ),
