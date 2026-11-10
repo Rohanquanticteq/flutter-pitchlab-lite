@@ -20,18 +20,25 @@ class PitchDetectorController extends ChangeNotifier {
       _onReading,
       onError: _onStreamError,
     );
+    _candidateSubscription = _service.candidateReadings.listen(
+      _onCandidateReading,
+      onError: _onStreamError,
+    );
   }
 
   final MicrophonePitchService _service;
   StreamSubscription<PitchReading?>? _readingSubscription;
+  StreamSubscription<PitchReading?>? _candidateSubscription;
 
   PitchDetectorStatus _status = PitchDetectorStatus.idle;
   PitchReading? _reading;
+  PitchReading? _candidateReading;
   String? _errorMessage;
   bool _disposed = false;
 
   PitchDetectorStatus get status => _status;
   PitchReading? get reading => _reading;
+  PitchReading? get candidateReading => _candidateReading;
   String? get errorMessage => _errorMessage;
 
   bool get isRunning =>
@@ -109,6 +116,15 @@ class PitchDetectorController extends ChangeNotifier {
     }
   }
 
+  void _onCandidateReading(PitchReading? reading) {
+    if (_disposed || !_service.isRunning) {
+      return;
+    }
+
+    _candidateReading = reading;
+    notifyListeners();
+  }
+
   void _onStreamError(Object error, StackTrace stackTrace) {
     if (_disposed) {
       return;
@@ -128,6 +144,11 @@ class PitchDetectorController extends ChangeNotifier {
     _status = status;
     _reading = reading;
     _errorMessage = error;
+    if (status == PitchDetectorStatus.idle ||
+        status == PitchDetectorStatus.permissionDenied ||
+        status == PitchDetectorStatus.error) {
+      _candidateReading = null;
+    }
     notifyListeners();
   }
 
@@ -136,6 +157,8 @@ class PitchDetectorController extends ChangeNotifier {
     _disposed = true;
     unawaited(_readingSubscription?.cancel());
     _readingSubscription = null;
+    unawaited(_candidateSubscription?.cancel());
+    _candidateSubscription = null;
     unawaited(_service.dispose());
     super.dispose();
   }
