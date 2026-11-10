@@ -105,7 +105,7 @@ class YinPitchDetector {
         }
       }
 
-      if (bestValue > 0.45) {
+      if (bestValue > 0.58) {
         return PitchDetection(
           frequency: null,
           confidence: (1.0 - bestValue).clamp(0.0, 1.0).toDouble(),
@@ -126,7 +126,7 @@ class YinPitchDetector {
     if (!frequency.isFinite ||
         frequency < minFrequency ||
         frequency > maxFrequency ||
-        confidence < 0.55) {
+        confidence < 0.42) {
       return PitchDetection(
         frequency: null,
         confidence: confidence,
