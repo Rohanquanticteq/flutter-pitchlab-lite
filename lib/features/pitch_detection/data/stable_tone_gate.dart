@@ -2,31 +2,41 @@ import 'dart:math' as math;
 
 import 'package:pitchlab_lite/features/pitch_detection/domain/pitch_reading.dart';
 
-/// Filters raw pitch estimates into tuner-grade readings.
+/// Converts raw pitch estimates into stable tuner-grade readings.
 ///
-/// YIN correctly finds pitch in voiced speech too. A tuner should not react to
-/// every short speech phoneme, so this gate requires a new chromatic pitch to
-/// remain stable for several consecutive frames before exposing it.
+/// Normal speech often contains valid instantaneous pitch, but changes too
+/// quickly to form a useful tuner trace. Musical tones are usually much more
+/// stable over time. This gate therefore:
 ///
-/// Stability is evaluated modulo one octave. That means octave estimation
-/// changes such as D#2 -> D#3 are treated as the same tuner pitch class.
+/// - requires a short stable acquisition window before exposing a new tone;
+/// - tracks the locked tone through normal vibrato and octave estimation flips;
+/// - bridges brief confidence dropouts instead of immediately breaking the line;
+/// - requires a different pitch to become stable before switching notes.
 class StableToneGate {
   StableToneGate({
-    this.acquireFrames = 5,
-    this.acquireToleranceCents = 55.0,
-    this.followToleranceCents = 100.0,
-    this.minimumConfidence = 0.70,
-    this.releaseAfterMissingFrames = 6,
+    this.acquireFrames = 4,
+    this.acquireToleranceCents = 70.0,
+    this.followToleranceCents = 130.0,
+    this.minimumAcquireConfidence = 0.58,
+    this.minimumFollowConfidence = 0.45,
+    this.holdFrames = 3,
+    this.releaseAfterMissingFrames = 8,
   }) : assert(acquireFrames > 0),
        assert(acquireToleranceCents > 0),
        assert(followToleranceCents >= acquireToleranceCents),
-       assert(minimumConfidence >= 0 && minimumConfidence <= 1),
-       assert(releaseAfterMissingFrames > 0);
+       assert(minimumAcquireConfidence >= 0 &&
+           minimumAcquireConfidence <= 1),
+       assert(minimumFollowConfidence >= 0 &&
+           minimumFollowConfidence <= 1),
+       assert(holdFrames >= 0),
+       assert(releaseAfterMissingFrames > holdFrames);
 
   final int acquireFrames;
   final double acquireToleranceCents;
   final double followToleranceCents;
-  final double minimumConfidence;
+  final double minimumAcquireConfidence;
+  final double minimumFollowConfidence;
+  final int holdFrames;
   final int releaseAfterMissingFrames;
 
   PitchReading? _lockedReading;
@@ -38,33 +48,47 @@ class StableToneGate {
   PitchReading? get lockedReading => _lockedReading;
 
   PitchReading? process(PitchReading? reading) {
-    if (reading == null || reading.confidence < minimumConfidence) {
-      _candidateAnchor = null;
-      _candidateLatest = null;
-      _candidateFrames = 0;
-      _missingFrames++;
+    final locked = _lockedReading;
 
-      if (_missingFrames >= releaseAfterMissingFrames) {
-        _lockedReading = null;
+    if (reading == null) {
+      return _handleMissingFrame(locked);
+    }
+
+    if (locked != null) {
+      final distance = _pitchClassDistanceCents(locked, reading);
+
+      if (reading.confidence >= minimumFollowConfidence &&
+          distance <= followToleranceCents) {
+        _missingFrames = 0;
+        _lockedReading = reading;
+        _clearCandidate();
+        return reading;
       }
 
-      // Silence/unreliable audio must create a visible gap. We retain the
-      // internal lock briefly only so a short dropout does not require a full
-      // re-acquisition when the same musical tone immediately returns.
+      // A different pitch must prove itself before replacing the lock.
+      if (reading.confidence >= minimumAcquireConfidence) {
+        final switched = _processCandidate(reading);
+        if (switched != null) {
+          return switched;
+        }
+      } else {
+        _clearCandidate();
+      }
+
+      return _handleMissingFrame(locked);
+    }
+
+    if (reading.confidence < minimumAcquireConfidence) {
+      _clearCandidate();
       return null;
     }
 
-    _missingFrames = 0;
-    final locked = _lockedReading;
+    return _processCandidate(reading);
+  }
 
-    if (locked != null &&
-        _pitchClassDistanceCents(locked, reading) <= followToleranceCents) {
-      _lockedReading = reading;
-      _clearCandidate();
-      return reading;
-    }
-
+  PitchReading? _processCandidate(PitchReading reading) {
     final anchor = _candidateAnchor;
+
     if (anchor == null ||
         _pitchClassDistanceCents(anchor, reading) > acquireToleranceCents) {
       _candidateAnchor = reading;
@@ -82,8 +106,33 @@ class StableToneGate {
 
     final accepted = _candidateLatest!;
     _lockedReading = accepted;
+    _missingFrames = 0;
     _clearCandidate();
     return accepted;
+  }
+
+  PitchReading? _handleMissingFrame(PitchReading? locked) {
+    _clearCandidate();
+    _missingFrames++;
+
+    if (locked == null) {
+      return null;
+    }
+
+    if (_missingFrames <= holdFrames) {
+      // Preserve short gaps as a weaker reading so the visual trace remains
+      // continuous through momentary YIN confidence dips.
+      return PitchReading.fromFrequency(
+        locked.frequency,
+        confidence: (locked.confidence * 0.72).clamp(0.0, 1.0),
+      );
+    }
+
+    if (_missingFrames >= releaseAfterMissingFrames) {
+      _lockedReading = null;
+    }
+
+    return null;
   }
 
   void reset() {
