@@ -259,12 +259,15 @@ class PitchHistoryPainter extends CustomPainter {
     required double historyStrength,
     required int seed,
   }) {
+    // Confidence now controls visual intensity directly. Weak-but-stable pitch
+    // is deliberately visible as a faint trace, while clean tones build a
+    // much brighter and thicker band.
     final strength =
-        ((0.30 + confidence * 0.70) * historyStrength)
+        ((0.06 + confidence * 0.94) * historyStrength)
             .clamp(0.0, 1.0)
             .toDouble();
-    final plumeHeight = rowSpacing * (0.18 + confidence * 0.22);
-    final plumeWidth = 2.5 + confidence * 3.5;
+    final plumeHeight = rowSpacing * (0.12 + confidence * 0.28);
+    final plumeWidth = 1.8 + confidence * 4.2;
 
     // A broad, low-opacity halo. Overlapping samples create the soft
     // horizontal energy band seen in PitchLab without connecting data points.
