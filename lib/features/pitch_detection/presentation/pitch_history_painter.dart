@@ -7,11 +7,13 @@ import 'package:pitchlab_lite/features/pitch_detection/presentation/pitch_histor
 class PitchHistoryPainter extends CustomPainter {
   PitchHistoryPainter({
     required this.points,
+    required this.candidatePoints,
     required this.now,
     required this.historyDuration,
   });
 
   final List<PitchHistoryPoint> points;
+  final List<PitchHistoryPoint> candidatePoints;
   final DateTime now;
   final Duration historyDuration;
 
@@ -60,6 +62,7 @@ class PitchHistoryPainter extends CustomPainter {
     final rowSpacing = (bottom - top) / (_notes.length - 1);
 
     _paintGrid(canvas, size, bottom, rowSpacing);
+    _paintCandidateHistory(canvas, size, top, bottom, rowSpacing);
     _paintHistory(canvas, size, top, bottom, rowSpacing);
   }
 
@@ -93,6 +96,55 @@ class PitchHistoryPainter extends CustomPainter {
       textPainter.paint(
         canvas,
         Offset(8, y - textPainter.height / 2),
+      );
+    }
+  }
+
+  void _paintCandidateHistory(
+    Canvas canvas,
+    Size size,
+    double top,
+    double bottom,
+    double rowSpacing,
+  ) {
+    if (candidatePoints.isEmpty) {
+      return;
+    }
+
+    final graphLeft = _labelWidth + 8;
+    final graphRight = size.width - 8;
+    final graphWidth = graphRight - graphLeft;
+    final historyMicros = historyDuration.inMicroseconds.toDouble();
+
+    for (final point in candidatePoints) {
+      final position = point.pitchClassPosition;
+      if (position == null) {
+        continue;
+      }
+
+      final ageMicros = now.difference(point.time).inMicroseconds.toDouble();
+      if (ageMicros < 0 || ageMicros > historyMicros) {
+        continue;
+      }
+
+      final x = graphRight - (ageMicros / historyMicros) * graphWidth;
+      final y = (bottom - position * rowSpacing).clamp(top, bottom).toDouble();
+      final confidence = point.confidence.clamp(0.0, 1.0).toDouble();
+      final pitchClass = position.round() % 12;
+      final ageFraction =
+          (ageMicros / historyMicros).clamp(0.0, 1.0).toDouble();
+      final historyStrength = 1.0 - ageFraction * 0.35;
+
+      _drawPitchEnergyMark(
+        canvas,
+        center: Offset(x, y),
+        color: _noteColors[pitchClass],
+        confidence: confidence,
+        rowSpacing: rowSpacing,
+        historyStrength: historyStrength,
+        seed: point.time.microsecondsSinceEpoch,
+        intensityScale: 0.34,
+        drawCore: false,
       );
     }
   }
@@ -258,12 +310,14 @@ class PitchHistoryPainter extends CustomPainter {
     required double rowSpacing,
     required double historyStrength,
     required int seed,
+    double intensityScale = 1.0,
+    bool drawCore = true,
   }) {
     // Confidence now controls visual intensity directly. Weak-but-stable pitch
     // is deliberately visible as a faint trace, while clean tones build a
     // much brighter and thicker band.
     final strength =
-        ((0.06 + confidence * 0.94) * historyStrength)
+        (((0.06 + confidence * 0.94) * historyStrength) * intensityScale)
             .clamp(0.0, 1.0)
             .toDouble();
     final plumeHeight = rowSpacing * (0.12 + confidence * 0.28);
@@ -294,15 +348,18 @@ class PitchHistoryPainter extends CustomPainter {
         ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 3),
     );
 
-    // Bright pitch core.
-    canvas.drawLine(
-      Offset(center.dx, center.dy - plumeHeight * 0.16),
-      Offset(center.dx, center.dy + plumeHeight * 0.16),
-      Paint()
-        ..color = color.withValues(alpha: 0.82 * strength)
-        ..strokeWidth = 1.1 + confidence * 1.7
-        ..strokeCap = StrokeCap.round,
-    );
+    // Bright pitch core is reserved for confirmed/stable pitch. Raw candidates
+    // stay soft so they read as uncertain energy rather than a locked note.
+    if (drawCore) {
+      canvas.drawLine(
+        Offset(center.dx, center.dy - plumeHeight * 0.16),
+        Offset(center.dx, center.dy + plumeHeight * 0.16),
+        Paint()
+          ..color = color.withValues(alpha: 0.82 * strength)
+          ..strokeWidth = 1.1 + confidence * 1.7
+          ..strokeCap = StrokeCap.round,
+      );
+    }
 
     // Deterministic side wisps mimic the reference app's fuzzy/noisy texture
     // without introducing random flicker on every repaint.
