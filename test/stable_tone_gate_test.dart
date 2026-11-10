@@ -102,6 +102,46 @@ void main() {
       expect(switched!.noteLabel, 'C');
     });
 
+
+    test('accepts weak pitch only after a longer stable window', () {
+      final gate = StableToneGate();
+
+      for (var i = 0; i < 6; i++) {
+        expect(
+          gate.process(reading(440.0, confidence: 0.48)),
+          isNull,
+        );
+      }
+
+      final accepted = gate.process(reading(440.0, confidence: 0.48));
+      expect(accepted, isNotNull);
+      expect(accepted!.noteLabel, 'A');
+      expect(accepted.confidence, closeTo(0.48, 0.001));
+    });
+
+    test('weak unstable background pitch does not acquire', () {
+      final gate = StableToneGate();
+      final changing = <double>[
+        196.00,
+        220.00,
+        246.94,
+        174.61,
+        261.63,
+        207.65,
+        293.66,
+        185.00,
+      ];
+
+      for (final frequency in changing) {
+        expect(
+          gate.process(reading(frequency, confidence: 0.48)),
+          isNull,
+        );
+      }
+
+      expect(gate.lockedReading, isNull);
+    });
+
     test('very low-confidence voiced input does not acquire a tone', () {
       final gate = StableToneGate();
 
