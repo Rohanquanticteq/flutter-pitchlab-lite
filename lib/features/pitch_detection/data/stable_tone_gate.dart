@@ -66,15 +66,17 @@ class StableToneGate {
       }
 
       // A different pitch must prove itself before replacing the lock.
+      // While that candidate is being acquired, keep the previous locked tone
+      // briefly for visual continuity without clearing the candidate state.
       if (reading.confidence >= minimumAcquireConfidence) {
         final switched = _processCandidate(reading);
         if (switched != null) {
           return switched;
         }
-      } else {
-        _clearCandidate();
+        return _holdLockedFrame(locked, preserveCandidate: true);
       }
 
+      _clearCandidate();
       return _handleMissingFrame(locked);
     }
 
@@ -113,6 +115,13 @@ class StableToneGate {
 
   PitchReading? _handleMissingFrame(PitchReading? locked) {
     _clearCandidate();
+    return _holdLockedFrame(locked, preserveCandidate: false);
+  }
+
+  PitchReading? _holdLockedFrame(
+    PitchReading? locked, {
+    required bool preserveCandidate,
+  }) {
     _missingFrames++;
 
     if (locked == null) {
@@ -121,7 +130,8 @@ class StableToneGate {
 
     if (_missingFrames <= holdFrames) {
       // Preserve short gaps as a weaker reading so the visual trace remains
-      // continuous through momentary YIN confidence dips.
+      // continuous through momentary YIN confidence dips or while a new note
+      // is being confirmed.
       return PitchReading.fromFrequency(
         locked.frequency,
         confidence: (locked.confidence * 0.72).clamp(0.0, 1.0),
@@ -130,6 +140,9 @@ class StableToneGate {
 
     if (_missingFrames >= releaseAfterMissingFrames) {
       _lockedReading = null;
+      if (!preserveCandidate) {
+        _clearCandidate();
+      }
     }
 
     return null;
