@@ -15,9 +15,11 @@ import 'package:pitchlab_lite/features/pitch_detection/domain/pitch_reading.dart
 class StableToneGate {
   StableToneGate({
     this.acquireFrames = 4,
+    this.weakAcquireFrames = 7,
     this.acquireToleranceCents = 70.0,
     this.followToleranceCents = 130.0,
     this.minimumAcquireConfidence = 0.58,
+    this.minimumWeakConfidence = 0.42,
     this.minimumFollowConfidence = 0.45,
     this.holdFrames = 3,
     this.releaseAfterMissingFrames = 8,
@@ -26,15 +28,19 @@ class StableToneGate {
        assert(followToleranceCents >= acquireToleranceCents),
        assert(minimumAcquireConfidence >= 0 &&
            minimumAcquireConfidence <= 1),
+       assert(minimumWeakConfidence >= 0 &&
+           minimumWeakConfidence <= minimumAcquireConfidence),
        assert(minimumFollowConfidence >= 0 &&
            minimumFollowConfidence <= 1),
        assert(holdFrames >= 0),
        assert(releaseAfterMissingFrames > holdFrames);
 
   final int acquireFrames;
+  final int weakAcquireFrames;
   final double acquireToleranceCents;
   final double followToleranceCents;
   final double minimumAcquireConfidence;
+  final double minimumWeakConfidence;
   final double minimumFollowConfidence;
   final int holdFrames;
   final int releaseAfterMissingFrames;
@@ -68,8 +74,13 @@ class StableToneGate {
       // A different pitch must prove itself before replacing the lock.
       // While that candidate is being acquired, keep the previous locked tone
       // briefly for visual continuity without clearing the candidate state.
-      if (reading.confidence >= minimumAcquireConfidence) {
-        final switched = _processCandidate(reading);
+      if (reading.confidence >= minimumWeakConfidence) {
+        final switched = _processCandidate(
+          reading,
+          requiredFrames: reading.confidence >= minimumAcquireConfidence
+              ? acquireFrames
+              : weakAcquireFrames,
+        );
         if (switched != null) {
           return switched;
         }
@@ -80,15 +91,23 @@ class StableToneGate {
       return _handleMissingFrame(locked);
     }
 
-    if (reading.confidence < minimumAcquireConfidence) {
+    if (reading.confidence < minimumWeakConfidence) {
       _clearCandidate();
       return null;
     }
 
-    return _processCandidate(reading);
+    return _processCandidate(
+      reading,
+      requiredFrames: reading.confidence >= minimumAcquireConfidence
+          ? acquireFrames
+          : weakAcquireFrames,
+    );
   }
 
-  PitchReading? _processCandidate(PitchReading reading) {
+  PitchReading? _processCandidate(
+    PitchReading reading, {
+    required int requiredFrames,
+  }) {
     final anchor = _candidateAnchor;
 
     if (anchor == null ||
@@ -102,7 +121,7 @@ class StableToneGate {
     _candidateLatest = reading;
     _candidateFrames++;
 
-    if (_candidateFrames < acquireFrames) {
+    if (_candidateFrames < requiredFrames) {
       return null;
     }
 
