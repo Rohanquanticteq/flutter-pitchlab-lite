@@ -113,37 +113,141 @@ class PitchHistoryPainter extends CustomPainter {
     final graphWidth = graphRight - graphLeft;
     final historyMicros = historyDuration.inMicroseconds.toDouble();
 
+    PitchHistoryPoint? previousPoint;
+    Offset? previousCenter;
+
     for (final point in points) {
       final position = point.pitchClassPosition;
       if (position == null) {
+        previousPoint = null;
+        previousCenter = null;
         continue;
       }
 
       final ageMicros = now.difference(point.time).inMicroseconds.toDouble();
       if (ageMicros < 0 || ageMicros > historyMicros) {
+        previousPoint = null;
+        previousCenter = null;
         continue;
       }
 
       final x = graphRight - (ageMicros / historyMicros) * graphWidth;
       final y = (bottom - position * rowSpacing).clamp(top, bottom).toDouble();
       final confidence = point.confidence.clamp(0.0, 1.0).toDouble();
-      final pitchClass = position.round() % 12;
-      final color = _noteColors[pitchClass];
+      final currentCenter = Offset(x, y);
 
       final ageFraction =
           (ageMicros / historyMicros).clamp(0.0, 1.0).toDouble();
       final historyStrength = 1.0 - ageFraction * 0.18;
 
+      final previous = previousPoint;
+      final previousOffset = previousCenter;
+      if (previous != null && previousOffset != null) {
+        final previousPosition = previous.pitchClassPosition!;
+        final timeGapMs = point.time.difference(previous.time).inMilliseconds;
+        final pitchDistance =
+            _pitchClassDistance(previousPosition, position);
+
+        if (timeGapMs > 0 &&
+            timeGapMs <= 180 &&
+            pitchDistance <= 0.75) {
+          _paintInterpolatedEnergy(
+            canvas,
+            fromPoint: previous,
+            toPoint: point,
+            from: previousOffset,
+            to: currentCenter,
+            fromPosition: previousPosition,
+            toPosition: position,
+            rowSpacing: rowSpacing,
+            top: top,
+            bottom: bottom,
+            historyStrength: historyStrength,
+          );
+        }
+      }
+
+      final pitchClass = position.round() % 12;
       _drawPitchEnergyMark(
         canvas,
-        center: Offset(x, y),
-        color: color,
+        center: currentCenter,
+        color: _noteColors[pitchClass],
         confidence: confidence,
         rowSpacing: rowSpacing,
         historyStrength: historyStrength,
         seed: point.time.microsecondsSinceEpoch,
       );
+
+      previousPoint = point;
+      previousCenter = currentCenter;
     }
+  }
+
+  void _paintInterpolatedEnergy(
+    Canvas canvas, {
+    required PitchHistoryPoint fromPoint,
+    required PitchHistoryPoint toPoint,
+    required Offset from,
+    required Offset to,
+    required double fromPosition,
+    required double toPosition,
+    required double rowSpacing,
+    required double top,
+    required double bottom,
+    required double historyStrength,
+  }) {
+    final pixelDistance = (to.dx - from.dx).abs();
+    if (pixelDistance < 3) {
+      return;
+    }
+
+    final steps = (pixelDistance / 3.0).ceil();
+    final pitchDelta = _shortestPitchDelta(fromPosition, toPosition);
+
+    for (var i = 1; i < steps; i++) {
+      final t = i / steps;
+      final x = from.dx + (to.dx - from.dx) * t;
+      final interpolatedPosition = _wrapPitchClass(
+        fromPosition + pitchDelta * t,
+      );
+      final y = (bottom - interpolatedPosition * rowSpacing)
+          .clamp(top, bottom)
+          .toDouble();
+      final confidence =
+          fromPoint.confidence +
+          (toPoint.confidence - fromPoint.confidence) * t;
+      final pitchClass = interpolatedPosition.round() % 12;
+
+      _drawPitchEnergyMark(
+        canvas,
+        center: Offset(x, y),
+        color: _noteColors[pitchClass],
+        confidence: confidence.clamp(0.0, 1.0).toDouble(),
+        rowSpacing: rowSpacing,
+        historyStrength: historyStrength,
+        seed: fromPoint.time.microsecondsSinceEpoch + i * 997,
+      );
+    }
+  }
+
+  double _pitchClassDistance(double first, double second) {
+    final difference = (first - second).abs();
+    return math.min(difference, 12.0 - difference);
+  }
+
+  double _shortestPitchDelta(double from, double to) {
+    var delta = to - from;
+    if (delta > 6.0) {
+      delta -= 12.0;
+    } else if (delta < -6.0) {
+      delta += 12.0;
+    }
+    return delta;
+  }
+
+  double _wrapPitchClass(double value) {
+    final wrapped = value % 12.0;
+    return wrapped < 0 ? wrapped + 12.0 : wrapped;
   }
 
   void _drawPitchEnergyMark(
