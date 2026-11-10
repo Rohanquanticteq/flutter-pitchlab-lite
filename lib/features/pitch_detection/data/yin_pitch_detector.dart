@@ -18,7 +18,7 @@ class YinPitchDetector {
   const YinPitchDetector._();
 
   static const double defaultThreshold = 0.15;
-  static const double defaultSilenceRms = 0.008;
+  static const double defaultSilenceRms = 0.0045;
   static const double defaultMinFrequency = 65.0;
   static const double defaultMaxFrequency = 1200.0;
 
@@ -105,7 +105,7 @@ class YinPitchDetector {
         }
       }
 
-      if (bestValue > 0.30) {
+      if (bestValue > 0.45) {
         return PitchDetection(
           frequency: null,
           confidence: (1.0 - bestValue).clamp(0.0, 1.0).toDouble(),
@@ -126,7 +126,7 @@ class YinPitchDetector {
     if (!frequency.isFinite ||
         frequency < minFrequency ||
         frequency > maxFrequency ||
-        confidence < 0.70) {
+        confidence < 0.55) {
       return PitchDetection(
         frequency: null,
         confidence: confidence,
