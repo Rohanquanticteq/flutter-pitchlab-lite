@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -69,8 +70,8 @@ class PitchHistoryPainter extends CustomPainter {
     double rowSpacing,
   ) {
     final linePaint = Paint()
-      ..color = const Color(0xFF7D858A).withValues(alpha: 0.48)
-      ..strokeWidth = 1.25;
+      ..color = const Color(0xFF7D858A).withValues(alpha: 0.42)
+      ..strokeWidth = 1.1;
 
     for (var pitchClass = 0; pitchClass < _notes.length; pitchClass++) {
       final y = bottom - pitchClass * rowSpacing;
@@ -103,98 +104,123 @@ class PitchHistoryPainter extends CustomPainter {
     double bottom,
     double rowSpacing,
   ) {
-    if (points.length < 2) {
+    if (points.isEmpty) {
       return;
     }
 
-    final graphLeft = _labelWidth + 10;
+    final graphLeft = _labelWidth + 8;
     final graphRight = size.width - 8;
     final graphWidth = graphRight - graphLeft;
     final historyMicros = historyDuration.inMicroseconds.toDouble();
 
-    PitchHistoryPoint? previous;
-    Offset? previousOffset;
-
     for (final point in points) {
-      final ageMicros = now.difference(point.time).inMicroseconds.toDouble();
-      if (ageMicros < 0 || ageMicros > historyMicros) {
-        previous = point;
-        previousOffset = null;
+      final position = point.pitchClassPosition;
+      if (position == null) {
         continue;
       }
 
-      final position = point.pitchClassPosition;
-      if (position == null) {
-        previous = point;
-        previousOffset = null;
+      final ageMicros = now.difference(point.time).inMicroseconds.toDouble();
+      if (ageMicros < 0 || ageMicros > historyMicros) {
         continue;
       }
 
       final x = graphRight - (ageMicros / historyMicros) * graphWidth;
-      final y = bottom - position * rowSpacing;
-      final currentOffset = Offset(x, y.clamp(top, bottom).toDouble());
+      final y = (bottom - position * rowSpacing).clamp(top, bottom).toDouble();
+      final confidence = point.confidence.clamp(0.0, 1.0).toDouble();
+      final pitchClass = position.round() % 12;
+      final color = _noteColors[pitchClass];
 
-      final previousPoint = previous;
-      final previousPointOffset = previousOffset;
-      if (previousPoint != null &&
-          previousPoint.hasPitch &&
-          previousPointOffset != null &&
-          point.time.difference(previousPoint.time).inMilliseconds <= 180) {
-        final averagePitch =
-            ((previousPoint.pitchClassPosition! + position) / 2).round() % 12;
-        final color = _noteColors[averagePitch];
-        final confidence = ((previousPoint.confidence + point.confidence) / 2)
-            .clamp(0.0, 1.0)
-            .toDouble();
-        _drawGlowingSegment(
-          canvas,
-          previousPointOffset,
-          currentOffset,
-          color,
-          confidence,
-        );
-      }
+      final ageFraction =
+          (ageMicros / historyMicros).clamp(0.0, 1.0).toDouble();
+      final historyStrength = 1.0 - ageFraction * 0.18;
 
-      previous = point;
-      previousOffset = currentOffset;
+      _drawPitchEnergyMark(
+        canvas,
+        center: Offset(x, y),
+        color: color,
+        confidence: confidence,
+        rowSpacing: rowSpacing,
+        historyStrength: historyStrength,
+        seed: point.time.microsecondsSinceEpoch,
+      );
     }
   }
 
-  void _drawGlowingSegment(
-    Canvas canvas,
-    Offset from,
-    Offset to,
-    Color color,
-    double confidence,
-  ) {
-    final opacity = (0.28 + confidence * 0.72).clamp(0.0, 1.0).toDouble();
+  void _drawPitchEnergyMark(
+    Canvas canvas, {
+    required Offset center,
+    required Color color,
+    required double confidence,
+    required double rowSpacing,
+    required double historyStrength,
+    required int seed,
+  }) {
+    final strength =
+        ((0.30 + confidence * 0.70) * historyStrength)
+            .clamp(0.0, 1.0)
+            .toDouble();
+    final plumeHeight = rowSpacing * (0.18 + confidence * 0.22);
+    final plumeWidth = 2.5 + confidence * 3.5;
 
-    canvas.drawLine(
-      from,
-      to,
+    // A broad, low-opacity halo. Overlapping samples create the soft
+    // horizontal energy band seen in PitchLab without connecting data points.
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: center,
+        width: plumeWidth * 3.0,
+        height: plumeHeight * 1.55,
+      ),
       Paint()
-        ..color = color.withValues(alpha: 0.15 * opacity)
-        ..strokeWidth = 13
-        ..strokeCap = StrokeCap.round
-        ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 8),
+        ..color = color.withValues(alpha: 0.10 * strength)
+        ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 7),
     );
+
+    // Mid-energy body. Each sample is independent, so a note change cannot
+    // create a vertical or diagonal connector to the previous note.
     canvas.drawLine(
-      from,
-      to,
+      Offset(center.dx, center.dy - plumeHeight * 0.42),
+      Offset(center.dx, center.dy + plumeHeight * 0.42),
       Paint()
-        ..color = color.withValues(alpha: 0.35 * opacity)
-        ..strokeWidth = 5
+        ..color = color.withValues(alpha: 0.28 * strength)
+        ..strokeWidth = plumeWidth
         ..strokeCap = StrokeCap.round
         ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 3),
     );
+
+    // Bright pitch core.
     canvas.drawLine(
-      from,
-      to,
+      Offset(center.dx, center.dy - plumeHeight * 0.16),
+      Offset(center.dx, center.dy + plumeHeight * 0.16),
       Paint()
-        ..color = color.withValues(alpha: opacity)
-        ..strokeWidth = 1.5 + confidence * 1.5
+        ..color = color.withValues(alpha: 0.82 * strength)
+        ..strokeWidth = 1.1 + confidence * 1.7
         ..strokeCap = StrokeCap.round,
     );
+
+    // Deterministic side wisps mimic the reference app's fuzzy/noisy texture
+    // without introducing random flicker on every repaint.
+    for (var i = 0; i < 3; i++) {
+      final noise = _noise(seed, i);
+      final side = i.isEven ? -1.0 : 1.0;
+      final dx = side * (1.3 + noise * plumeWidth);
+      final verticalOffset = (noise - 0.5) * plumeHeight * 0.58;
+      final halfHeight = plumeHeight * (0.08 + noise * 0.14);
+
+      canvas.drawLine(
+        Offset(center.dx + dx, center.dy + verticalOffset - halfHeight),
+        Offset(center.dx + dx, center.dy + verticalOffset + halfHeight),
+        Paint()
+          ..color = color.withValues(alpha: 0.18 * strength)
+          ..strokeWidth = 0.7 + noise
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 1.5),
+      );
+    }
+  }
+
+  double _noise(int seed, int index) {
+    final value = math.sin(seed * 0.000001 + index * 12.9898) * 43758.5453;
+    return value - value.floorToDouble();
   }
 
   @override
