@@ -18,6 +18,8 @@ class MicrophonePitchService {
   final StableToneGate _stableToneGate = StableToneGate();
   final StreamController<PitchReading?> _readingController =
       StreamController<PitchReading?>.broadcast();
+  final StreamController<PitchReading?> _candidateController =
+      StreamController<PitchReading?>.broadcast();
 
   final Uint8List _frameBuffer = Uint8List(_frameByteCount);
   int _frameOffset = 0;
@@ -28,6 +30,12 @@ class MicrophonePitchService {
   StreamSubscription<PitchAnalysisResult>? _analysisSubscription;
 
   Stream<PitchReading?> get readings => _readingController.stream;
+
+  /// Plausible raw pitch that has not yet passed the stable-tone gate.
+  ///
+  /// This is visual-only data. It must never replace the locked tuner reading.
+  Stream<PitchReading?> get candidateReadings => _candidateController.stream;
+
   bool get isRunning => _isRunning;
 
   Future<bool> start() async {
@@ -84,6 +92,9 @@ class MicrophonePitchService {
     if (!_readingController.isClosed) {
       _readingController.add(null);
     }
+    if (!_candidateController.isClosed) {
+      _candidateController.add(null);
+    }
   }
 
   Future<void> dispose() async {
@@ -97,6 +108,7 @@ class MicrophonePitchService {
     await _analysisWorker.dispose();
     await _recorder.dispose();
     await _readingController.close();
+    await _candidateController.close();
   }
 
   void _handleAudioChunk(Uint8List chunk) {
@@ -133,6 +145,9 @@ class MicrophonePitchService {
 
     final frequency = result.frequency;
     if (frequency == null) {
+      if (!_candidateController.isClosed) {
+        _candidateController.add(null);
+      }
       _readingController.add(_stableToneGate.process(null));
       return;
     }
@@ -141,7 +156,13 @@ class MicrophonePitchService {
       frequency,
       confidence: result.confidence,
     );
+    final stableReading = _stableToneGate.process(rawReading);
 
-    _readingController.add(_stableToneGate.process(rawReading));
+    // Only expose a raw candidate while it is still unconfirmed. Once the
+    // stable gate locks the pitch, the normal tuner reading owns the display.
+    if (!_candidateController.isClosed) {
+      _candidateController.add(stableReading == null ? rawReading : null);
+    }
+    _readingController.add(stableReading);
   }
 }
